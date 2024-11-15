@@ -31,34 +31,32 @@ class ViTLinear(nn.Module):
         y = self.linear(out)
         return y
 
-# class ViTWithDeepPrompts(nn.Module):
-#     def __init__(self, n_classes, encoder_name, prompt_len=10):
-#         super(ViTWithDeepPrompts, self).__init__()
-        
-#         self.vit_b = get_encoder(encoder_name)
 
-#         # 加载参数
-#         for param in self.vit_b.parameters():
-#             param.requires_grad = False
-#         self.vit_b.heads[0] = nn.Identity()
+class VPT(nn.Module):
+    def __init__(self, n_classes, encoder_name, num_layers, prompt_len, hidden_dim=768):
+        super(VPT, self).__init__()
         
-#         # 更改模型
-#         self.hidden_dim = self.vit_b.hidden_dim
-#         self.num_layers = len(self.vit_b.encoder.layers)
-#         self.prompt_len = prompt_len
-#         self.deep_prompts = nn.Parameter(torch.zeros(1, self.num_layers, self.prompt_len, self.hidden_dim))
-#         v = np.sqrt(6. / float(3 * self.hidden_dim + self.prompt_len))
-#         nn.init.uniform_(self.deep_prompts, -v, v)
+        self.vit_b = vit_b_32(weights=ViT_B_32_Weights.IMAGENET1K_V1)
         
-#         self.linear = nn.Linear(self.hidden_dim, n_classes)
+        # Reinitialize the head with a new layer
+        self.vit_b[0].heads[0] = nn.Identity()
+
+        v = math.sqrt(6 / (hidden_dim + prompt_len))
+        self.prompts = nn.Parameter(torch.empty(1, num_layers, prompt_len, hidden_dim).uniform_(-v, v))
+
+        self.linear = nn.Linear(hidden_dim, n_classes)
     
-#     def forward(self, x):
-#         B = x.shape[0]
-#         prompts = self.deep_prompts.expand(B, -1, -1, -1)  # 形状：(B, num_layers, prompt_len, hidden_dim)
-#         x = self.vit_b(x, prompts)
+    def forward(self, x):
+        batch_size = x.shape[0]
+        prompts = self.prompts.expand(batch_size, -1, -1, -1)
         
-#         y = self.linear(x)
-#         return y
+        for i, layer in enumerate(self.vit_b.encoder.layers):
+            x = torch.cat([prompts[:, i], x], dim=1)
+            x = layer(x)
+        
+        cls_token = x[:, 0]
+        y = self.linear(cls_token)
+        return y
     
 
 def test(test_loader, model, device):
