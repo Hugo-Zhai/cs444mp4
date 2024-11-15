@@ -1,4 +1,15 @@
 # Do hyperparameter setting here
+vit_prompt:
+    lr: 0.01
+    wd: 0.01
+    epochs: 100
+    optimizer: 'sgd'
+    scheduler: 'multi_step'
+    momentum: 0.99
+    net_class: VPT
+    batch_size: 32
+    prompt_len: 10
+
 vit_linear:
     lr: 0.001
     wd: 0.01
@@ -8,4 +19,3 @@ vit_linear:
     momentum: 0.99
     net_class: ViTLinear
     batch_size: 32
-
