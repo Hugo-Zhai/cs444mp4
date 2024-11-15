@@ -99,9 +99,10 @@ class EncoderBlock(nn.Module):
         self.ln_2 = norm_layer(hidden_dim)
         self.mlp = MLPBlock(hidden_dim, mlp_dim, dropout)
 
-    def forward(self, input: torch.Tensor):
-        torch._assert(input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}")
-        x = self.ln_1(input)
+    def forward(self, input: torch.Tensor, prompt: torch.Tensor):
+        # torch._assert(input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}")
+        x = torch.cat([prompt, input], dim=1)
+        x = self.ln_1(x)
         x, _ = self.self_attention(x, x, x, need_weights=False)
         x = self.dropout(x)
         x = x + input
@@ -121,6 +122,7 @@ class Encoder(nn.Module):
         num_heads: int,
         hidden_dim: int,
         mlp_dim: int,
+        prompt_len: int,
         dropout: float,
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
@@ -129,6 +131,9 @@ class Encoder(nn.Module):
         # Note that batch_size is on the first dim because
         # we have batch_first=True in nn.MultiAttention() by default
         self.pos_embedding = nn.Parameter(torch.empty(1, seq_length, hidden_dim).normal_(std=0.02))  # from BERT
+        self.prompt_embedding = nn.Parameter(torch.zeros(1, num_layers, prompt_len, hidden_dim))  #
+        nn.init.uniform_(self.prompt_embedding, -0.1, 0.1)
+
         self.dropout = nn.Dropout(dropout)
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
@@ -146,7 +151,11 @@ class Encoder(nn.Module):
     def forward(self, input: torch.Tensor):
         torch._assert(input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}")
         input = input + self.pos_embedding
-        return self.ln(self.layers(self.dropout(input)))
+        prompts = self.prompt_embedding.expand(input.size(0), -1, -1, -1)
+        for i, layer in enumerate(self.layers):
+            input = layer(input, prompts[:, i])
+
+        return self.ln(input)
 
 
 class VisionTransformer(nn.Module):
@@ -160,6 +169,7 @@ class VisionTransformer(nn.Module):
         num_heads: int,
         hidden_dim: int,
         mlp_dim: int,
+        prompt_len: int = 10,
         dropout: float = 0.0,
         attention_dropout: float = 0.0,
         num_classes: int = 1000,
@@ -218,6 +228,7 @@ class VisionTransformer(nn.Module):
             num_heads,
             hidden_dim,
             mlp_dim,
+            prompt_len,
             dropout,
             attention_dropout,
             norm_layer,
@@ -280,8 +291,10 @@ class VisionTransformer(nn.Module):
 
     def forward(self, x: torch.Tensor):
         # Reshape and permute the input tensor
-        x = self._process_input(x)
-        n = x.shape[0]
+        # x = self._process_input(x)
+        x = self.conv_proj(x)
+        x = x.flatten(2).transpose(1, 2)
+        n = s.shape[0]
 
         # Expand the class token to the full batch
         batch_class_token = self.class_token.expand(n, -1, -1)
@@ -324,7 +337,7 @@ def _vision_transformer(
     )
 
     if weights:
-        model.load_state_dict(weights.get_state_dict(progress=progress))
+        model.load_state_dict(weights.get_state_dict(progress=progress), strict=False)#
 
     return model
 
